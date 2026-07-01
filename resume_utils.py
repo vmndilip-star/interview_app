@@ -1,7 +1,9 @@
 """resume_utils.py — resume ingestion (PDF/text) and validation.
 
-Drop this file next to app.py, prompts.py, llm.py, db.py.
-Then in app.py:  from resume_utils import extract_resume_text, looks_like_resume
+Sits next to app.py, bot.py, prompts.py, llm.py, db.py.
+
+app.py  uses:  extract_resume_text (Streamlit upload), looks_like_resume
+bot.py  uses:  extract_resume_from_bytes (Telegram file bytes), looks_like_resume
 """
 
 import re
@@ -9,7 +11,7 @@ from io import BytesIO
 
 
 def extract_resume_text(uploaded_file) -> str:
-    """Return plain text from a Streamlit-uploaded PDF or text file.
+    """Extract text from a Streamlit-uploaded PDF or text file.
 
     `uploaded_file` is the object returned by st.file_uploader (has .name/.read()).
     """
@@ -19,10 +21,24 @@ def extract_resume_text(uploaded_file) -> str:
     if name.endswith(".pdf"):
         from pypdf import PdfReader  # lazy import so text-only setups don't need it
         reader = PdfReader(BytesIO(data))
-        pages = [(page.extract_text() or "") for page in reader.pages]
-        return "\n".join(pages).strip()
+        return "\n".join((p.extract_text() or "") for p in reader.pages).strip()
 
     # anything else: treat as plain text
+    return data.decode("utf-8", errors="ignore").strip()
+
+
+def extract_resume_from_bytes(data: bytes, filename: str = "") -> str:
+    """Extract text from downloaded file bytes (used by the Telegram bot).
+
+    Telegram gives raw bytes + a filename, not a Streamlit upload object.
+    """
+    name = (filename or "").lower()
+
+    if name.endswith(".pdf"):
+        from pypdf import PdfReader
+        reader = PdfReader(BytesIO(data))
+        return "\n".join((p.extract_text() or "") for p in reader.pages).strip()
+
     return data.decode("utf-8", errors="ignore").strip()
 
 
