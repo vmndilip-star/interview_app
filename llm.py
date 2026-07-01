@@ -60,3 +60,11 @@ def transcribe(audio_file) -> str:
         file=("answer.wav", audio_bytes),
     )
     return resp.text.strip()
+
+def transcribe_bytes(audio_bytes: bytes, filename: str = "answer.ogg") -> str:
+    """Same as transcribe(), but takes raw bytes directly (for Telegram voice notes)."""
+    resp = client.audio.transcriptions.create(
+        model="whisper-1",
+        file=(filename, audio_bytes),
+    )
+    return resp.text.strip()
