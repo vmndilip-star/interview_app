@@ -12,7 +12,8 @@ import streamlit as st
 
 import db
 from prompts import PHASES, build_interviewer_prompt, build_evaluator_prompt
-from llm import ask_question, evaluate, transcribe
+from llm import ask_question, evaluate, transcribe, compress_profile
+from resume_utils import extract_resume_text, looks_like_resume
 
 db.init_db()
 st.set_page_config(page_title="Interview Practice", layout="centered")
@@ -24,6 +25,8 @@ ss.setdefault("session_id", None)
 ss.setdefault("phase_idx", 0)
 ss.setdefault("turn", 0)
 ss.setdefault("history", [])          # list of {"phase","question","answer"}
+ss.setdefault("asked_questions", [])  # every question text asked, to avoid repeats
+ss.setdefault("profile", "")          # compact resume+JD summary (built once)
 ss.setdefault("pending_question", None)
 ss.setdefault("evaluation", None)
 
@@ -33,25 +36,50 @@ def current_phase() -> str:
 
 
 def generate_question():
-    prompt = build_interviewer_prompt(ss.job_description, ss.resume, current_phase(), ss.history)
+    # send the compact profile + only the last few turns + the full asked-list
+    prompt = build_interviewer_prompt(
+        ss.profile, current_phase(), ss.history[-3:], ss.asked_questions
+    )
     result = ask_question(prompt)
     ss.pending_question = result.get("question", "Tell me about yourself.")
     ss.phase_complete = result.get("phase_complete", False)
+    if ss.pending_question:
+        ss.asked_questions.append(ss.pending_question)
 
 
 # ===================== SETUP SCREEN =====================
 if ss.screen == "setup":
     st.title("Interview practice")
-    st.caption("Paste a resume and job description to start a mock interview.")
+    st.caption("Upload a resume (PDF or text) and paste a job description to start a mock interview.")
 
-    ss.resume = st.text_area("Resume", height=200, key="resume_input")
+    st.subheader("Your resume")
+    resume_file = st.file_uploader("Upload resume (PDF or .txt)", type=["pdf", "txt"])
+    resume_pasted = st.text_area("…or paste it here instead", height=200, key="resume_input")
+
     ss.job_description = st.text_area("Job description", height=150, key="jd_input")
 
-    if st.button("Start interview", type="primary", disabled=not (ss.resume and ss.job_description)):
+    if st.button("Start interview", type="primary"):
+        resume = extract_resume_text(resume_file) if resume_file else (resume_pasted or "").strip()
+
+        ok, reason = looks_like_resume(resume)
+        if not ok:
+            st.error(reason)
+            st.stop()
+        if not ss.job_description.strip():
+            st.error("Please paste a job description.")
+            st.stop()
+
+        ss.resume = resume
         ss.session_id = db.create_session(ss.resume, ss.job_description)
+
+        # one-time compression: raw resume+JD -> compact profile reused every turn
+        with st.spinner("Analyzing resume and job description..."):
+            ss.profile = compress_profile(ss.resume, ss.job_description)
+
         ss.phase_idx = 0
         ss.turn = 0
         ss.history = []
+        ss.asked_questions = []
         generate_question()
         ss.screen = "interview"
         st.rerun()
@@ -100,6 +128,10 @@ elif ss.screen == "interview":
 
     # 3) submit
     if st.button("Submit answer", type="primary", disabled=not str(answer).strip()):
+        answer = str(answer).strip()
+        if not answer:                 # belt-and-suspenders: never store blanks
+            st.warning("Please type or record an answer before submitting.")
+            st.stop()
         ss.turn += 1
         db.log_qa(ss.session_id, ss.turn, current_phase(), ss.pending_question, answer)
         ss.history.append({"phase": current_phase(), "question": ss.pending_question, "answer": answer})
@@ -155,6 +187,6 @@ elif ss.screen == "results":
 
     if st.button("New interview"):
         for k in ["screen", "session_id", "phase_idx", "turn", "history",
-                  "pending_question", "evaluation"]:
+                  "asked_questions", "profile", "pending_question", "evaluation"]:
             ss.pop(k, None)
         st.rerun()

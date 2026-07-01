@@ -17,6 +17,7 @@ client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 # quality matters.
 INTERVIEWER_MODEL = "gpt-4o-mini"
 EVALUATOR_MODEL = "gpt-4o-mini"
+PROFILE_MODEL = "gpt-4o-mini"   # one-time resume+JD compression at session start
 
 
 def _call_json(model: str, prompt: str, temperature: float) -> dict:
@@ -47,6 +48,40 @@ def ask_question(prompt: str) -> dict:
 def evaluate(prompt: str) -> dict:
     # Low temperature -> consistent scoring across candidates.
     return _call_json(EVALUATOR_MODEL, prompt, temperature=0.2)
+
+
+def compress_profile(resume: str, jd: str) -> str:
+    """Distil the raw resume + job description into a compact profile ONCE.
+
+    Called a single time at session start. The returned string (~250 tokens)
+    is what the interviewer prompt uses every turn instead of the full resume
+    and JD - that's the token saving. Returns plain text, not JSON, so it drops
+    straight into build_interviewer_prompt.
+    """
+    prompt = f"""You are preparing a briefing for a technical interviewer.
+Condense the resume and job description below into a tight, factual profile the
+interviewer can use to ask sharp questions. Keep it under ~250 words. Do NOT
+invent anything not present in the source. Use this exact structure:
+
+CANDIDATE SUMMARY: <2-3 lines: who they are, seniority, trajectory>
+KEY SKILLS: <comma-separated, only the ones that matter for this role>
+NOTABLE PROJECTS: <bullet each real project worth probing - name it, their role,
+and the one thing an interviewer should push on>
+ROLE MUST-HAVES: <the job description's core required skills/responsibilities>
+GAPS OR THINGS TO PROBE: <any mismatch between the resume and the role>
+
+=== RESUME ===
+{resume}
+
+=== JOB DESCRIPTION ===
+{jd}"""
+
+    resp = client.chat.completions.create(
+        model=PROFILE_MODEL,
+        temperature=0,                # deterministic, factual
+        messages=[{"role": "user", "content": prompt}],
+    )
+    return resp.choices[0].message.content.strip()
 
 
 def transcribe(audio_file) -> str:
